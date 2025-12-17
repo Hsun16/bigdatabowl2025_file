@@ -271,4 +271,13 @@ pre_throw <- pre_throw_fcgl %>%
   )
 gtsave(pre_throw,"pre_throw.png", expand = 0 )
 ```
+```{r}
+library(magick)
+img1 <- image_read("post_throw.png")
+img2 <- image_read("pre_throw.png")
+gap <- image_blank(width = 80, height = image_info(img1)$height, color = "white")
+combined <- image_append(c(img1, gap, img2), stack = FALSE)  # FALSE = side by side
+image_write(combined, "combined_tables.png")
+
+```
 
