@@ -10,6 +10,7 @@ library(scales)
 library(ggplot2)
 library(gganimate)
 library(sportyR)
+library(gt)
 ```
 
 
@@ -61,7 +62,213 @@ anim_save("play_1.gif", anim,
           height = 800,     
           res = 150) 
 ```
+```{r}
+example_play <- sample_data |> 
+  filter(game_id == 2023100807, play_id == 2356) |> 
+  mutate(pt_color = case_when(player_role == "Targeted Receiver" ~ "yellow",
+                              player_side == "Offense" ~ "navy",
+                              player_side == "Defense" ~ "white",))
+example_play["normalized_influence"] = scale(example_play$influence_at_land)
+bar_chart <- example_play |>
+  ggplot(aes(x = player_name,y = normalized_influence, fill = player_side))+
+  geom_col()+theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  transition_time(example_play$frame_id)+
+  scale_fill_manual(name = "Player's Side", values = c("black","orange"))+
+  labs(title = "Field Control at the landing point for players",
+       x = "player name",
+       y = "normalized field control")
+anim_save("bar_chart.gif", bar_chart, 
+          fps = 10,
+          width = 1200,
+          height = 800,     
+          res = 150) 
+```
 
 
+```{r}
+calculate_influence_gain_rate <- function(play_df, fps = 10) {
+  
+  play_df %>%
+    group_by(nfl_id) %>%
+    summarise(
+      # Get player info (first non-NA value)
+      player_name = first(na.omit(player_name)),
+      player_position = first(na.omit(player_position)),
+      player_side = first(na.omit(player_side)),
+      
+      # Initial influence: frame_id == 1
+      initial_influence = normalized_influence[frame_id == min(frame_id)],
+      
+      # Final influence: frame_id == max
+      final_influence = normalized_influence[frame_id == max(frame_id)],
+      
+      
+      # Number of output frames
+      num_frames = n(),
+      
+      .groups = "drop"
+    ) %>%
+    mutate(
+      # Time elapsed in seconds
+      time_elapsed = (num_frames - 1) / fps,
+      
+      # Influence change
+      influence_change = final_influence - initial_influence,
+      
+      # Influence gain rate (per second)
+      influence_gain_rate = if_else(time_elapsed > 0, 
+                                     influence_change / time_elapsed, 
+                                     0)
+    ) %>%
+    arrange(desc(influence_gain_rate))
+}
 
+
+#' Plot influence gain rate for players in a play
+#' 
+#' @param gain_df DataFrame output from calculate_influence_gain_rate
+#' @param title Plot title (default: auto-generated)
+#' @param show_values Whether to show value labels on bars (default: TRUE)
+#' @return ggplot object
+plot_influence_gain_rate <- function(gain_df, 
+                                      title = "Defender Influence Gain Rate",
+                                      show_values = TRUE,
+                                      offense_color = "red",
+                                      defense_color = "blue",
+                                      offense_label = "Offense",
+                                      defense_label = "Defense") {
+  
+  # Create label for x-axis (use player_name if available, else nfl_id)
+  plot_df <- gain_df %>%
+    mutate(
+      player_label = if_else(!is.na(player_name), 
+                              paste0(player_name, "\n(", player_position, ")"),
+                              as.character(nfl_id))
+    )
+  
+  # Reorder by gain rate
+  plot_df <- plot_df %>%
+    mutate(player_label = fct_reorder(player_label, influence_gain_rate))
+  
+  # Create color mapping
+  color_mapping <- setNames(
+    c(offense_color, defense_color),
+    c(offense_label, defense_label)
+  )
+  
+  # Map player_side to labels
+  plot_df <- plot_df %>%
+    mutate(
+      side_label = case_when(
+        tolower(player_side) == "offense" ~ offense_label,
+        tolower(player_side) == "defense" ~ defense_label,
+        TRUE ~ "Other"
+      )
+    )
+  
+  p <- ggplot(plot_df, aes(x = player_label, y = influence_gain_rate, fill = side_label)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = color_mapping, name = "Side") +
+    coord_flip() +
+    labs(
+      title = title,
+      subtitle = "Before the ball is thrown",
+      x = "Player",
+      y = "FCGL"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, size = 10),
+      axis.text.y = element_text(size = 9),
+      legend.position = "bottom"
+    )
+  
+  # Add value labels if requested
+  if (show_values) {
+    p <- p +
+      geom_text(aes(label = sprintf("%.4f", influence_gain_rate),
+                    hjust = if_else(influence_gain_rate >= 0, -0.1, 1.1)),
+                size = 3)
+  }
+  
+  return(p)
+}
+
+```
+
+```{r}
+
+gain_rates <- calculate_influence_gain_rate(example_play)
+FCGL_sample <- plot_influence_gain_rate(
+  gain_rates,
+  title = "Players' FCGL for the Example Play",
+  offense_color = "orange",
+  defense_color = "black",
+  offense_label = "Bengals",
+  defense_label = "Cardinals"
+)
+ggsave("FGCL_sample.png",FCGL_sample, width = 10 , height =  7, dpi = 320 )
+FCGL_sample
+```
+```{r}
+fcgl <- read_csv("fcgl_player_level.csv")
+fcgl <- fcgl |> filter(num_plays>30)
+```
+```{r}
+post_throw <- fcgl %>%
+  filter(num_plays >= 30) %>%                    # Minimum plays filter
+  arrange(desc(avg_influence_gain_rate)) %>%
+  head(15) %>%
+  mutate(Rank = row_number()) %>%
+  select(Rank, Player = player_name, Position = player_position, 
+         `Total Plays` = num_plays, `FCGL` = avg_influence_gain_rate) %>%
+  gt() %>%
+  tab_header(
+    title = "Top 15 Defenders by Mean Post-throw FCGL per Play",
+    subtitle = "(Minimum 30 plays)"
+  ) %>%
+  fmt_number(
+    columns = `FCGL`,
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = `FCGL`,
+    palette = c("white", "orange")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  )
+gtsave(post_throw,"post_throw.png", expand = 0 )
+```
+```{r}
+pre_throw_fcgl <- read_csv("pre_throw_fcgl_player_level.csv")
+pre_throw <- pre_throw_fcgl %>%
+  filter(num_plays >= 30) %>%                    # Minimum plays filter
+  arrange(desc(avg_influence_gain_rate)) %>%
+  head(15) %>%
+  mutate(Rank = row_number()) %>%
+  select(Rank, Player = player_name, Position = player_position, 
+         `Total Plays` = num_plays, `FCGL` = avg_influence_gain_rate) %>%
+  gt() %>%
+  tab_header(
+    title = "Top 15 Defenders by Mean Pre-throw FCGL per Play",
+    subtitle = "(Minimum 30 plays, minimum 10 frames each play)"
+  ) %>%
+  fmt_number(
+    columns = `FCGL`,
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = `FCGL`,
+    palette = c("white", "blue")
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  )
+gtsave(pre_throw,"pre_throw.png", expand = 0 )
+```
 
