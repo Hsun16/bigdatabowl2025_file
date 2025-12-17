@@ -1,0 +1,67 @@
+---
+title: "plotting"
+format: pdf
+
+---
+
+```{r}
+library(tidyverse)
+library(scales)
+library(ggplot2)
+library(gganimate)
+library(sportyR)
+```
+
+
+```{r}
+sample_data <- read_csv("with_field_control/input_2023_w05.csv")
+```
+```{r}
+filter(sample_data, game_id == 2023100807, play_id == 2356)
+```
+
+```{r}
+source("plot_field_influence.R")
+
+# Single frame
+p <- plot_field_influence(
+  df = sample_data,
+  game_id = 2023100807,
+  play_id = 2356,
+  frame_id = 10,
+  step = 0.5,
+  show_velocities = FALSE
+)
+print(p)
+```
+```{r}
+source("plot_field_influence.R")
+anim <- plot_field_influence_animated(
+  df = sample_data,
+  game_id = 2023100807,
+  play_id = 2356,
+  title = "Bengals vs Cardinals - Week 05, 2023",
+  subtitle = "Sample play: J.Burrow's Pass to Chase for Touchdown ",
+  offense_color = "darkorange",
+  offense_label = "Bengals",
+  defense_color = "black", 
+  defense_label = "Cardinals",
+  tracked_color = "gold",
+  tracked_label = "Receiver",
+  alpha = 0.9,
+  step = 1
+)
+anim_save("play.gif", anim, fps = 10)
+anim
+```
+```{r}
+anim_save("play_1.gif", anim, 
+          fps = 10,
+          width = 1200,
+          height = 800,     
+          res = 150) 
+```
+
+
+
+
